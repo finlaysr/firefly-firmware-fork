@@ -179,6 +179,7 @@ pub static RECEIVED_MESSAGE_QUEUE: Mutex<RefCell<Deque<Message<logs::RadioCtxt>,
 
 #[interrupt]
 fn RTC_WKUP() {
+    return;
     cortex_m::interrupt::free(|cs| {
         let mut rtc_ref = crate::RTC.borrow(cs).borrow_mut();
         if let Some(rtc) = rtc_ref.deref_mut() {
@@ -244,6 +245,7 @@ fn receive_message() {
 /// Called from timer interrupt and when the radio interrupt fires.
 /// The radio interrupt fires when the radio is done transmitting a packet.
 fn set_radio() {
+    return;
     let state = cortex_m::interrupt::free(|cs| RADIO_STATE.borrow(cs).get());
 
     let r = match state {
