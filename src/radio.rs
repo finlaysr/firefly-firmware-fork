@@ -2,6 +2,7 @@ use core::cell::Cell;
 use core::cell::RefCell;
 
 use core::convert::Infallible;
+use core::fmt::Write as _;
 use core::ops::DerefMut;
 use core::sync::atomic::AtomicBool;
 use core::sync::atomic::AtomicU16;
@@ -15,6 +16,7 @@ use crate::pins::radio::RadioChipSelect;
 use crate::pins::radio::RadioInteruptPin;
 use crate::pins::radio::RadioResetPin;
 use crate::pins::radio::RadioSpi;
+use crate::usb_logger::get_serial;
 use cortex_m::interrupt::Mutex;
 use dummy_pin::DummyPin;
 use embedded_hal::spi::SpiDevice;
@@ -63,7 +65,7 @@ fn dio1_interrupt_impl() {
                 radio.radio.wait_on_busy().unwrap();
                 if let RadioState::Tx(transmitter) = RADIO_STATE.borrow(cs).get() {
                     return transmitter != mission::role()
-                        && (transmitter == Role::GroundMain || mission::role() == Role::GroundMain || mission::role() == Role::GroundBackup);
+                        && (transmitter == Role::GroundMain || mission::role() == Role::GroundMain);
                 }
             }
 
@@ -170,10 +172,6 @@ const fn total_tdm_duration() -> u32 {
     total
 }
 
-const TDM_CONFIG_BACKUP: [(RadioState, u32); 1] = [
-    (RadioState::Tx(Role::CansatBackup), total_tdm_duration()),
-];
-
 pub static RECEIVED_MESSAGE_QUEUE: Mutex<RefCell<Deque<Message<logs::RadioCtxt>, 64>>> =
     Mutex::new(RefCell::new(Deque::new()));
 
@@ -192,11 +190,7 @@ fn RTC_WKUP() {
             let t_secs = (s as u32 * 1000 + millis as u32) % total_tdm_duration();
 
             let mut offset = 0;
-            let tdm_config: &[_] = match role() {
-                Role::GroundBackup | Role::CansatBackup => &TDM_CONFIG_BACKUP,
-                _ => &TDM_CONFIG_MAIN,
-                
-            };
+            let tdm_config = &TDM_CONFIG_MAIN;
             for (state, duration) in tdm_config.iter() {
                 if t_secs < offset + *duration {
                     RADIO_STATE.borrow(cs).set(*state);
@@ -295,7 +289,7 @@ fn set_radio() {
         }
         RadioState::Tx(other) | RadioState::Buffer(other) => {
             // Someone else is transmitting
-            if mission::role() == Role::GroundMain || other == Role::GroundMain || mission::role() == Role::GroundBackup {
+            if mission::role() == Role::GroundMain || other == Role::GroundMain {
                 if LISTEN_IN_PROGRESS.load(Ordering::Relaxed) {
                     return;
                 }
