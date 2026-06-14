@@ -1,14 +1,14 @@
 use fugit::RateExtU32;
 use stm32f4xx_hal::{
-    gpio::{gpioc, gpioe, Output, PushPull},
+    ClearFlags,
+    gpio::{Output, PushPull, gpioc, gpioe},
     interrupt,
     pac::{TIM1, TIM2, TIM5},
     timer::{CounterHz, PwmChannel, PwmHzManager},
-    ClearFlags
 };
 
-static mut TARGET_POSE_DEG: [f32; 3] = [0.0; 3];
-static mut CURRENT_POSE_DEG: [f32; 3] = [0.0; 3];
+static mut TARGET_POSE_DEG: [f32; 2] = [0.0; 2];
+static mut CURRENT_POSE_DEG: [f32; 2] = [0.0; 2];
 static mut LAST_TIME_MS: u32 = 0;
 
 static mut SELF_ALT: f32 = 0.0;
@@ -24,8 +24,8 @@ pub fn update_target_alt(alt: f32) {
 
     unsafe {
         use micromath::F32Ext;
-        crate::hprintln!("Updating target alt to {}m (self alt {}m)", alt, SELF_ALT); // for debugging 
-        TARGET_POSE_DEG[2] = (alt - SELF_ALT).atan2(dist) * 180.0 / core::f32::consts::PI;
+        // crate::hprintln!("Updating target alt to {}m (self alt {}m)", alt, SELF_ALT); // for debugging
+        TARGET_POSE_DEG[1] = (alt - SELF_ALT).atan2(dist);
     }
 }
 

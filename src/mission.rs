@@ -765,46 +765,47 @@ async fn bmp_altimeter_handler(
     timer.start(550.millis()).unwrap();
     NbFuture::new(|| timer.wait()).await.unwrap();
     loop {
-        const NTH: usize = 4;
-        let mut samples = [PressureTempSample::default(); 40 * NTH];
+        let mut samples = [PressureTempSample::default(); ALTIMETER_FRAME_COUNT];
+        let (frames, sensor2) = crate::altimeter::read_altimeter_fifo(sensor).await;
+        sensor = sensor2;
+        for (sample, frame) in samples
+            .iter_mut()
+            .zip(frames.iter())
+            .take(ALTIMETER_FRAME_COUNT - 1)
+        {
+            let pressure = frame.pressure;
+            let temperature = frame.temperature;
 
-        for sample in samples.iter_mut() {
-            let (frames, returned_sensor) = crate::altimeter::read_altimeter_fifo(sensor).await;
-            sensor = returned_sensor;
-            for frame in &frames {
-                let pressure = frame.pressure;
-                let temperature = frame.temperature;
-
-                *sample = PressureTempSample {
-                    timestamp: current_rtc_time(),
-                    pressure,
-                    temperature,
-                };
-            }
+            *sample = PressureTempSample {
+                timestamp: current_rtc_time(),
+                pressure,
+                temperature,
+            };
 
             if role() == Role::GroundMain {
-                let alt = (libm::powf(1013.25 / sample.pressure, 1.0 / 5.257) - 1.0)
+                let alt = (libm::powf(101325. / sample.pressure, 1.0 / 5.257) - 1.0)
                     * (sample.temperature + 273.15)
                     / 0.0065;
                 crate::gs::update_self_alt(alt);
             }
+        }
 
+        if role() != Role::GroundMain {
             pressure_sender
                 .send(Vec::from_slice(&frames).unwrap())
                 .await
                 .unwrap();
-            timer.clear_flags(timer::Flag::Update);
-            timer.start(400.millis()).unwrap();
-            // FIXME: Use interrupt to wait for FIFO to fill up.
-            NbFuture::new(|| timer.wait()).await.unwrap();
         }
+        timer.clear_flags(timer::Flag::Update);
+        timer.start(400.millis()).unwrap();
+        // FIXME: Use interrupt to wait for FIFO to fill up.
+        NbFuture::new(|| timer.wait()).await.unwrap();
 
-        let radio_msg = MessageType::new_pressure_temp(samples.into_iter().enumerate().filter_map(
-            |(i, sample)| {
-                if i % NTH == 0 { Some(sample) } else { None }
-            },
-        ))
-        .into_message(radio_ctxt());
+        if role() != Role::GroundMain {
+            let radio_msg =
+                MessageType::new_pressure_temp(samples.into_iter()).into_message(radio_ctxt());
+            radio::queue_packet(radio_msg);
+        }
 
         get_logger()
             .log(
@@ -813,7 +814,6 @@ async fn bmp_altimeter_handler(
                     .into_message(current_rtc_time()),
             )
             .await;
-        radio::queue_packet(radio_msg);
     }
 }
 
@@ -884,7 +884,7 @@ async fn handle_incoming_packets() -> ! {
                             {
                                 #[cfg(feature = "target-maxi")]
                                 if role() == Role::GroundMain {
-                                    let altitude = (libm::powf(1013.25 / pressure, 1.0 / 5.257)
+                                    let altitude = (libm::powf(101325. / pressure, 1.0 / 5.257)
                                         - 1.0)
                                         * (temperature + 273.15)
                                         / 0.0065;
@@ -1434,7 +1434,6 @@ pub async fn bmi323_imu_handler(
 
         let mut samples = [IMUSample::default(); 16];
         for sample in samples.iter_mut() {
-
             NbFuture::new(|| timer.wait()).await.unwrap();
             sample.timestamp = current_rtc_time();
             sample.acceleration.copy_from_slice(
@@ -1632,7 +1631,13 @@ where
         Role::GroundMain =>
         {
             #[allow(unreachable_code)]
-            join!(usb_handler(), gps_handler(gps), handle_incoming_packets()).0
+            join!(
+                usb_handler(),
+                altimeter_task,
+                gps_handler(gps),
+                handle_incoming_packets()
+            )
+            .0
         }
         Role::Avionics => {
             #[allow(unreachable_code)]
